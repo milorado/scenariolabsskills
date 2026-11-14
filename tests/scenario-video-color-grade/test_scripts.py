@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -97,6 +98,23 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("--force", again.stderr)
         self.run_ok("render_looks.py", "clip.mp4", "--looks", "looks.json", "--out", "r", "--only", "00_ungraded",
                     "--force")
+
+    def test_framewise_encoder_failure_is_not_reported_as_rendered(self):
+        source = self.dir / "odd.mkv"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "3x3",
+                        "-r", "24", "-i", "-", "-frames:v", "1", "-c:v", "ffv1", str(source)],
+                       input=bytes([120] * 27), check=True)
+        result = helpers.run("render_looks.py", str(source), "--looks", "looks.json", "--out", "failed",
+                             "--only", "02_relit", cwd=self.dir)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("rendered 02_relit", result.stdout)
+        self.assertFalse((self.dir / "failed/02_relit.mp4").exists())
+        previous = self.dir / "failed/02_relit.mp4"
+        previous.write_bytes(b"previous completed render")
+        again = helpers.run("render_looks.py", str(source), "--looks", "looks.json", "--out", "failed",
+                            "--only", "02_relit", "--force", cwd=self.dir)
+        self.assertNotEqual(again.returncode, 0)
+        self.assertEqual(previous.read_bytes(), b"previous completed render")
 
     def test_match_measures_both_images(self):
         Image.new("RGB", (40, 30), (230, 140, 60)).save(self.dir / "ref.png")

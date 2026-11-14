@@ -14,6 +14,12 @@ if [ "${1:-}" = "--check" ]; then
   exit 0
 fi
 
+if ! git diff --cached --quiet -- project-words.txt &&
+  ! git diff --quiet -- project-words.txt; then
+  echo "project-words.txt has staged and unstaged edits; stage or unstage it before sorting" >&2
+  exit 1
+fi
+
 LC_ALL=C sort -u -o project-words.txt project-words.txt
 
 if ! git diff --cached --quiet -- project-words.txt; then

@@ -12,8 +12,10 @@ are processed per frame in numpy first (one decode pass shared by all of them), 
 same LUT + finishing is applied by the encoder.
 """
 import argparse
+from contextlib import suppress
 import subprocess
 from pathlib import Path
+import tempfile
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -131,20 +133,37 @@ def main():
         print("rendered", k, flush=True)
 
     if framewise:
-        encs = {k: media.encoder(out / f"{k}.mp4", W, H, info["fps_str"], lut_vf(lut_dir / f"{k}.cube", look),
-                                 audio, a.crf) for k, look in framewise.items()}
-        readers = {p: media.mask_frames(resolve(p), W, H) for p in mpaths}
-        for i, rgb in enumerate(media.frames(src, W, H)):
-            t = i / info["fps"]
-            masks = {p: next(r) for p, r in readers.items()}
-            for k, look in framewise.items():
-                media.write(encs[k], spatial.process(rgb, W, H, t, look, masks))
-            if i % 24 == 0:
-                print(f"  frame {i}/{info['frames']}", flush=True)
-        for k, e in encs.items():
-            e.stdin.close()
-            e.wait()
-            print("rendered", k, flush=True)
+        with tempfile.TemporaryDirectory(prefix=".render-", dir=out) as directory:
+            pending = Path(directory)
+            encs, readers = {}, {}
+            try:
+                for k, look in framewise.items():
+                    encs[k] = media.encoder(pending / f"{k}.mp4", W, H, info["fps_str"],
+                                            lut_vf(lut_dir / f"{k}.cube", look), audio, a.crf)
+                readers = {p: media.mask_frames(resolve(p), W, H) for p in mpaths}
+                for i, rgb in enumerate(media.frames(src, W, H)):
+                    t = i / info["fps"]
+                    masks = {p: next(r) for p, r in readers.items()}
+                    for k, look in framewise.items():
+                        media.write(encs[k], spatial.process(rgb, W, H, t, look, masks))
+                    if i % 24 == 0:
+                        print(f"  frame {i}/{info['frames']}", flush=True)
+                for k, e in encs.items():
+                    e.stdin.close()
+                    if e.wait() != 0:
+                        raise RuntimeError(f"encoder failed for {k}")
+                for k in encs:
+                    (pending / f"{k}.mp4").replace(out / f"{k}.mp4")
+                    print("rendered", k, flush=True)
+            finally:
+                for reader in readers.values():
+                    reader.close()
+                for e in encs.values():
+                    if e.poll() is None:
+                        e.terminate()
+                    with suppress(OSError):
+                        e.stdin.close()
+                    e.wait()
     print("done", out)
 
 
